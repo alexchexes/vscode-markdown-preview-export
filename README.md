@@ -1,6 +1,6 @@
 # markdown-preview-export
 
-Export your Markdown preview from Visual Studio Code exactly as you see it (styles, images, etc) to an HTML file. Open the result in your browser to print, save as PDF, or share.
+Export your Markdown preview from Visual Studio Code exactly as you see it (styles, images, etc) to an HTML file. Open the result in your browser to print, save as PDF, or share.  
 
 ## Features
 
@@ -13,6 +13,11 @@ Export your Markdown preview from Visual Studio Code exactly as you see it (styl
 2. Click the **Export Preview** button in the preview title bar, or run the `Markdown: Export Preview` command from the Command Palette.
 3. The extension saves the HTML file to your system's temporary folder (e.g., `C:\Users\<user>\AppData\Local\Temp\markdown-preview.html` on Windows).
 4. After export, click **Open in Browser** in the notification to launch in your default system browser.  If you are exporting multiple documents, there's no need to open another window -- just refresh.
+
+![A red circled icon in the preview title bar at the top right is highlighted with a tooltip that reads Export Preview, indicating the export action.](/assets/Screenshot.png)
+
+> **Note!**
+> If you already had a markdown preview open when you install or enable this extension, you'll need to close and re-open it or open another to make the menu option visible.  From then on it should always be visible.
 
 ## Commands
 
@@ -40,4 +45,7 @@ The extension hooks into the Markdown preview rendering process, captures the fu
 
 ### 0.0.1
 - Initial release: Export Markdown preview as HTML, matching VS Code theme, with quick open in browser.
+
+### 0.0.2
+- Bug fixes for edge cases during installation
 

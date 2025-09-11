@@ -3,6 +3,12 @@ import type MarkdownIt from 'markdown-it';
 import * as os from 'os';
 import * as path from 'path';
 
+// well-known identifiers used in multiple places
+const CONTEXT_HAS_PROVIDER = 'markdownPreviewExport.hasProvider';
+const CMD_EXPORT_PREVIEW = 'markdown.exportPreview';
+const CMD_CANCEL_PREVIEW = 'markdown.cancelPreviewExport';
+const STATUS_TEXT_EXPORTING = "$(loading~spin) Exporting preview... $(x) Cancel";
+
 // main helper object
 const markdownHelper = (() => {
 	let cache:
@@ -15,6 +21,8 @@ const markdownHelper = (() => {
 	return {
 		update: ([, , env]: any[]): void => {
 			if (!env || !env.currentDocument || !env.resourceProvider) {
+				// No provider available; ensure the context key is cleared so the menu is hidden
+				void vscode.commands.executeCommand('setContext', CONTEXT_HAS_PROVIDER, false);
 				return;
 			}
 
@@ -22,12 +30,17 @@ const markdownHelper = (() => {
 				ResourceUri: env.currentDocument,
 				Provider: env.resourceProvider,
 			};
+
+			// Indicate that we now have a valid preview provider reference
+			void vscode.commands.executeCommand('setContext', CONTEXT_HAS_PROVIDER, true);
 		},
 
 		render: async (token: vscode.CancellationToken) => {
 			console.log('Attempting to export markdown preview');
 
 			if (cache === undefined || cache.Provider.isDisposed) {
+				// If provider is not available anymore, clear the context so the menu hides
+				void vscode.commands.executeCommand('setContext', CONTEXT_HAS_PROVIDER, false);
 				return Promise.reject('No preview provider found');
 			}
 
@@ -185,56 +198,100 @@ function appendThemeClass(html: string): string {
 		}
 	);
 }
+
+// track currently active export so we don't run two exports at once
+let activeExportCancellation: vscode.CancellationTokenSource | undefined = undefined;
+
 export async function activate(context: vscode.ExtensionContext) {
-	context.subscriptions.push(
-		vscode.commands.registerCommand('markdown.exportPreview', async () => {
-			const cancellationTokenSource = new vscode.CancellationTokenSource();
+	// Ensure the export button is hidden until we obtain a valid preview provider
+	// this avoids the condition where the button is visible but doesn't work when a 
+	// preview window is already open at the time the extension is installed or enabled
+	void vscode.commands.executeCommand('setContext', CONTEXT_HAS_PROVIDER, false);
 
-			// Register the token source with the context for disposal
-			context.subscriptions.push(cancellationTokenSource);
-
-			try {
-				// Create a status bar item to allow cancellation
-				const statusBarItem = vscode.window.createStatusBarItem(
-					vscode.StatusBarAlignment.Left
-				);
-				statusBarItem.text = '$(loading~spin) Exporting preview... $(x) Cancel';
-				statusBarItem.command = 'markdown.cancelPreviewExport';
-				statusBarItem.show();
-				context.subscriptions.push(statusBarItem);
-
-				// Register a command to cancel the operation
-				const cancelDisposable = vscode.commands.registerCommand(
-					'markdown.cancelPreviewExport',
-					() => {
-						cancellationTokenSource.cancel();
-						statusBarItem.hide();
-						vscode.window.showInformationMessage(
-							'Preview export cancelled'
-						);
+		context.subscriptions.push(
+			vscode.commands.registerCommand(CMD_EXPORT_PREVIEW, async () => {
+				// If an export is already active, offer to cancel it or abort starting a new one
+				if (activeExportCancellation && !activeExportCancellation.token.isCancellationRequested) {
+					const choice = await vscode.window.showInformationMessage(
+						'Another export is already in progress.',
+						{ modal: false },
+						'Cancel and start new'
+					);
+					if (choice !== 'Cancel and start new') {
+						return; // abort starting a new export
 					}
-				);
-				context.subscriptions.push(cancelDisposable);
-
-				// Render the preview to HTML
-				await markdownHelper.render(cancellationTokenSource.token);
-
-				// Clean up
-				statusBarItem.hide();
-				cancelDisposable.dispose();
-			} catch (error) {
-				if (cancellationTokenSource.token.isCancellationRequested) {
-					console.log('Operation was cancelled by user');
-				} else {
-					console.error('Error in preview generation:', error);
-					vscode.window.showErrorMessage(`Failed to generate preview: ${error}`);
+					// cancel the previous export and continue
+					activeExportCancellation.cancel();
 				}
-			} finally {
-				// Clean up resources
-				cancellationTokenSource.dispose();
-			}
-		})
-	);
+
+				const cancellationTokenSource = new vscode.CancellationTokenSource();
+				activeExportCancellation = cancellationTokenSource;
+
+				// Register the token source with the context for disposal
+				context.subscriptions.push(cancellationTokenSource);
+
+				// Declare disposables here so we can clean them up even if errors occur
+				let statusBarItem: vscode.StatusBarItem | undefined;
+				let cancelDisposable: vscode.Disposable | undefined;
+
+				try {
+					// Create a status bar item to allow cancellation
+					statusBarItem = vscode.window.createStatusBarItem(
+						vscode.StatusBarAlignment.Left
+					);
+					statusBarItem.text = STATUS_TEXT_EXPORTING;
+					statusBarItem.command = CMD_CANCEL_PREVIEW;
+					statusBarItem.show();
+					context.subscriptions.push(statusBarItem);
+
+					// Register a command to cancel the operation
+					cancelDisposable = vscode.commands.registerCommand(
+						CMD_CANCEL_PREVIEW,
+						() => {
+							cancellationTokenSource.cancel();
+							statusBarItem?.hide();
+							vscode.window.showInformationMessage(
+								'Preview export cancelled'
+							);
+						}
+					);
+					context.subscriptions.push(cancelDisposable);
+
+					// Render the preview to HTML
+					await markdownHelper.render(cancellationTokenSource.token);
+
+					// Clean up on success
+					statusBarItem.hide();
+					cancelDisposable.dispose();
+				} catch (error) {
+					if (cancellationTokenSource.token.isCancellationRequested) {
+						console.log('Operation was cancelled by user');
+					} else {
+						console.error('Error in preview generation:', error);
+						vscode.window.showErrorMessage(`Failed to generate preview: ${error}`);
+					}
+				} finally {
+					// Ensure we always hide and dispose the status bar and the cancel command
+					try {
+						statusBarItem?.hide();
+						statusBarItem?.dispose();
+					} catch (e) {
+						// ignore
+					}
+					try {
+						cancelDisposable?.dispose();
+					} catch (e) {
+						// ignore
+					}
+					// Always dispose of the token source
+					cancellationTokenSource.dispose();
+					// Clear active marker so new exports can start
+					if (activeExportCancellation === cancellationTokenSource) {
+						activeExportCancellation = undefined;
+					}
+				}
+			})
+		);
 
 	// Register the markdown-it plugin
 	return {
