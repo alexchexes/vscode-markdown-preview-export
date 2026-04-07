@@ -40,6 +40,11 @@
 			"type": "object",
 			"title": "Markdown Preview Export",
 			"properties": {
+				"markdownPreviewExport.embedLocalImages": {
+					"type": "boolean",
+					"default": true,
+					"description": "Embed local images as data URIs in the exported HTML. Remote and existing data URI images are left unchanged."
+				},
 				"markdownPreviewExport.outputMode": {
 					"type": "string",
 					"default": "temp",

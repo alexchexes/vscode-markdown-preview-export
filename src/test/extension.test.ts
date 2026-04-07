@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url';
 // You can import and use all API from the 'vscode' module
 // as well as import your extension to test it
 import * as vscode from 'vscode';
-import { getBesideMarkdownOutputUri, restoreOriginalImageSources } from '../extension';
+import { getBesideMarkdownOutputUri, restoreOriginalImageSources, rewriteImageSources } from '../extension';
 
 suite('Extension Test Suite', function () {
 	this.timeout(10000);
@@ -55,25 +55,46 @@ suite('Extension Test Suite', function () {
 		assert.ok(!html.includes('file:///d%3A/'));
 	});
 
-	test('Builds beside-markdown output file URI', () => {
-		const expected = path.join(os.tmpdir(), 'workspace', 'docs', 'readme.html');
-		const sourceUri = vscode.Uri.file(
-			path.join(os.tmpdir(), 'workspace', 'docs', 'readme.md')
+	test('Embeds local markdown image sources as data URIs', async () => {
+		const tempRoot = vscode.Uri.file(
+			path.join(os.tmpdir(), `markdown-preview-export-${Date.now()}`)
 		);
-		const outputUri = getBesideMarkdownOutputUri(sourceUri);
+		const imageUri = vscode.Uri.joinPath(tempRoot, 'assets', 'image.png');
+		const resourceUri = vscode.Uri.joinPath(tempRoot, 'docs', 'readme.md');
 
-		assert.strictEqual(outputUri?.scheme, 'file');
-		if (process.platform === 'win32') {
-			assert.strictEqual(outputUri?.fsPath.toLowerCase(), expected.toLowerCase());
-		} else {
-			assert.strictEqual(outputUri?.fsPath, expected);
+		try {
+			await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(tempRoot, 'assets'));
+			await vscode.workspace.fs.writeFile(
+				imageUri,
+				Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+			);
+
+			const html = await rewriteImageSources(
+				'<img src="vscode-webview://preview/image.png" data-src="../assets/image.png">',
+				resourceUri,
+				true
+			);
+
+			assert.ok(html.includes('src="data:image/png;base64,iVBORw=="'));
+			assert.ok(html.includes('data-src="../assets/image.png"'));
+		} finally {
+			try {
+				await vscode.workspace.fs.delete(tempRoot, { recursive: true, useTrash: false });
+			} catch {
+				// ignore cleanup failures
+			}
 		}
 	});
 
-	test('Does not build beside-markdown output URI for untitled documents', () => {
-		const outputUri = getBesideMarkdownOutputUri(vscode.Uri.parse('untitled:Untitled-1'));
+	test('Does not embed remote markdown image sources', async () => {
+		const resourceUri = vscode.Uri.file('/workspace/docs/readme.md');
+		const html = await rewriteImageSources(
+			'<img src="https://example.com/image.png" data-src="https://example.com/image.png">',
+			resourceUri,
+			true
+		);
 
-		assert.strictEqual(outputUri, undefined);
+		assert.ok(html.includes('src="https://example.com/image.png"'));
 	});
 
 	test('Escapes restored markdown image sources', () => {
@@ -97,5 +118,26 @@ suite('Extension Test Suite', function () {
 		assert.strictEqual(typeof html, 'string');
 		assert.ok(html.includes('Exported Preview'));
 		assert.ok(html.includes('<h1'));
+	});
+
+	test('Builds beside-markdown output file URI', () => {
+		const expected = path.join(os.tmpdir(), 'workspace', 'docs', 'readme.html');
+		const sourceUri = vscode.Uri.file(
+			path.join(os.tmpdir(), 'workspace', 'docs', 'readme.md')
+		);
+		const outputUri = getBesideMarkdownOutputUri(sourceUri);
+
+		assert.strictEqual(outputUri?.scheme, 'file');
+		if (process.platform === 'win32') {
+			assert.strictEqual(outputUri?.fsPath.toLowerCase(), expected.toLowerCase());
+		} else {
+			assert.strictEqual(outputUri?.fsPath, expected);
+		}
+	});
+
+	test('Does not build beside-markdown output URI for untitled documents', () => {
+		const outputUri = getBesideMarkdownOutputUri(vscode.Uri.parse('untitled:Untitled-1'));
+
+		assert.strictEqual(outputUri, undefined);
 	});
 });
